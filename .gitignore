@@ -1,0 +1,19 @@
+# Build artifacts
+dist/
+build-logs/
+*.log
+
+# Dependencies
+node_modules/
+
+# Termux / on-device scratch
+.env
+.env.local
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Local native addon build outputs (we build node-pty on-device)
+build/
