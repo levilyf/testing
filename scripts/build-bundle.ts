@@ -10,7 +10,7 @@
 //                     prebuilds are unavailable)
 
 import * as esbuild from 'esbuild'
-import { resolve, dirname, relative } from 'path'
+import { resolve, dirname } from 'path'
 import { chmodSync, readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 
@@ -91,19 +91,23 @@ const srcResolverPlugin: esbuild.Plugin = {
   },
 }
 
-// ── Plugin: resolve relative requires() ──
-// Dynamic require() calls inside feature gates (e.g., require('../services/...'))
-// need special handling because esbuild normalizes them relative to the importer's directory.
-// This plugin resolves them correctly by treating them as relative to the importing file.
-const requireResolverPlugin: esbuild.Plugin = {
-  name: 'require-resolver',
+// ── Plugin: resolve relative imports/requires with context ──
+// Handles relative paths like '../services/compact/snipCompact.js' by resolving
+// them relative to the importing file's directory, with .js → .ts fallback.
+// Matches both ESM imports and CommonJS requires (esbuild normalizes both).
+const relativeResolverPlugin: esbuild.Plugin = {
+  name: 'relative-resolver',
   setup(build) {
-    // Match relative requires: '../foo', './bar', '../../baz'
-    build.onResolve({ filter: /^\.\.?\//, namespace: 'file' }, (args) => {
-      // args.path is the require() string (e.g., '../services/compact/snipCompact.js')
-      // args.importer is the file doing the requiring
-      const fromDir = dirname(args.importer)
-      const basePath = resolve(fromDir, args.path)
+    // Match relative paths: '../foo', './bar', '../../baz'
+    build.onResolve({ filter: /^\.\.?\// }, (args) => {
+      const importer = args.importer
+      if (!importer) {
+        // No importer context; let esbuild handle it
+        return undefined
+      }
+
+      const importerDir = dirname(importer)
+      const basePath = resolve(importerDir, args.path)
 
       // Already exists as-is
       if (existsSync(basePath)) {
@@ -120,9 +124,8 @@ const requireResolverPlugin: esbuild.Plugin = {
       }
 
       // Try as directory with index file
-      const dirPath = basePath.replace(/\.(js|jsx)$/, '')
       for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
-        const candidate = resolve(dirPath, 'index' + ext)
+        const candidate = resolve(withoutExt, 'index' + ext)
         if (existsSync(candidate)) {
           return { path: candidate }
         }
@@ -163,7 +166,7 @@ const buildOptions: esbuild.BuildOptions = {
   // Single-file output — no code splitting for CLI tools
   splitting: false,
 
-  plugins: [srcResolverPlugin, requireResolverPlugin, nativeShimPlugin],
+  plugins: [srcResolverPlugin, relativeResolverPlugin, nativeShimPlugin],
 
   // Use tsconfig for baseUrl / paths resolution (complements plugin above)
   tsconfig: resolve(ROOT, 'tsconfig.json'),
