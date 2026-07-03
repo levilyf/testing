@@ -10,7 +10,7 @@
 //                     prebuilds are unavailable)
 
 import * as esbuild from 'esbuild'
-import { resolve, dirname } from 'path'
+import { resolve, dirname, relative } from 'path'
 import { chmodSync, readFileSync, existsSync } from 'fs'
 import { fileURLToPath } from 'url'
 
@@ -91,6 +91,49 @@ const srcResolverPlugin: esbuild.Plugin = {
   },
 }
 
+// ── Plugin: resolve relative requires() ──
+// Dynamic require() calls inside feature gates (e.g., require('../services/...'))
+// need special handling because esbuild normalizes them relative to the importer's directory.
+// This plugin resolves them correctly by treating them as relative to the importing file.
+const requireResolverPlugin: esbuild.Plugin = {
+  name: 'require-resolver',
+  setup(build) {
+    // Match relative requires: '../foo', './bar', '../../baz'
+    build.onResolve({ filter: /^\.\.?\//, namespace: 'file' }, (args) => {
+      // args.path is the require() string (e.g., '../services/compact/snipCompact.js')
+      // args.importer is the file doing the requiring
+      const fromDir = dirname(args.importer)
+      const basePath = resolve(fromDir, args.path)
+
+      // Already exists as-is
+      if (existsSync(basePath)) {
+        return { path: basePath }
+      }
+
+      // Strip .js/.jsx and try TypeScript extensions
+      const withoutExt = basePath.replace(/\.(js|jsx)$/, '')
+      for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
+        const candidate = withoutExt + ext
+        if (existsSync(candidate)) {
+          return { path: candidate }
+        }
+      }
+
+      // Try as directory with index file
+      const dirPath = basePath.replace(/\.(js|jsx)$/, '')
+      for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
+        const candidate = resolve(dirPath, 'index' + ext)
+        if (existsSync(candidate)) {
+          return { path: candidate }
+        }
+      }
+
+      // Let esbuild handle it (will error if truly missing)
+      return undefined
+    })
+  },
+}
+
 // ── Plugin (32-bit only): route native imports to no-op shims ──
 // When --arch=32 is passed, node-pty and image-processor-napi prebuilds are
 // typically unavailable. Redirect their imports to scripts/shims/native-shim.ts
@@ -120,7 +163,7 @@ const buildOptions: esbuild.BuildOptions = {
   // Single-file output — no code splitting for CLI tools
   splitting: false,
 
-  plugins: [srcResolverPlugin, nativeShimPlugin],
+  plugins: [srcResolverPlugin, requireResolverPlugin, nativeShimPlugin],
 
   // Use tsconfig for baseUrl / paths resolution (complements plugin above)
   tsconfig: resolve(ROOT, 'tsconfig.json'),
